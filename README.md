@@ -34,11 +34,10 @@ Verified against the real 21-page Schwab IRA Application: 293 real fields extrac
 positioned (confirmed visually via a test envelope — see the plan doc for details).
 
 ### `POST /.netlify/functions/onboard-pdf`
-The full pipeline: extract → map field names → create a DocuSign Template → create a matching
-Milemarker Form + Workflow → attach the create-trigger to the shared n8n automation → write the
-document-identity mapping record n8n uses to resolve the template. **Requires DocuSign + Milemarker
-env vars** (see `.env.example`) — this is a fully wired, end-to-end onboard, not just the
-Milemarker/DocuSign records.
+Starts the full pipeline as a **background job**: extract → map field names → create a DocuSign
+Template → create a matching Milemarker Form + Workflow → attach the create-trigger to the shared
+n8n automation → write the document-identity mapping record n8n uses to resolve the template.
+**Requires DocuSign + Milemarker env vars** (see `.env.example`).
 
 ```json
 {
@@ -48,9 +47,36 @@ Milemarker/DocuSign records.
   "workflow_description": "optional"
 }
 ```
+Returns almost immediately (HTTP 202) with a job id — the pipeline itself keeps running in the
+background:
 ```json
-{ "formId": 62, "workflowId": 55, "templateId": "8d59e356-...", "fieldCount": 291, "byType": { "text": 150, "checkbox": 141 }, "n8nAttached": true, "mappingRecordId": "01M...", "note": "..." }
+{ "job_id": "3f2e...", "status": "pending", "message": "..." }
 ```
+
+**Why this is async, not synchronous:** the full pipeline chains 7+ sequential network calls
+(PDF parse, DocuSign OAuth, DocuSign Template creation with the PDF's own bytes uploaded, Milemarker
+Form creation, Milemarker Workflow creation, the n8n attach, the mapping record) — for a real
+multi-MB, multi-page PDF this routinely exceeds Netlify's synchronous Function execution limit
+(~10-26s depending on plan). Discovered live: a 21-page, 2.9MB PDF hit a 504 "Inactivity Timeout"
+on the old synchronous version. `netlify/functions/onboard-pdf-background.js` (note the
+`-background` filename suffix — that's what tells Netlify to run it as a Background Function, up
+to 15 minutes, at the cost of not being able to return a result directly to the caller) now does
+the actual work; `onboard-pdf.js` and the `onboard_pdf` MCP tool just kick it off via
+`lib/onboard-async.js#startOnboarding` and return a `job_id`.
+
+### `GET/POST /.netlify/functions/check-onboarding-status`
+Poll this with the `job_id` from `onboard-pdf`/`onboard_pdf` to get the result once it's done.
+```
+GET /.netlify/functions/check-onboarding-status?job_id=3f2e...
+```
+```json
+{ "jobId": "3f2e...", "status": "success", "documentName": "4.pdf", "workflowName": "Schwab IRA Account Application", "result": { "formId": 62, "workflowId": 55, "templateId": "8d59e356-...", "fieldCount": 291, "byType": { "text": 150, "checkbox": 141 }, "n8nAttached": true, "mappingRecordId": "01M..." }, "errorMessage": null }
+```
+`status` is `"pending"` while the background job is still running, `"success"` with the full
+result once done, or `"error"` with `errorMessage` set. Job state lives in the
+`docusign_onboarding_jobs` Milemarker custom object (`lib/job-store.js`) — a separate type from
+`docusign_onboarded_documents`, since a pending/failed job shouldn't pollute the "documents that
+are actually onboarded" mapping-store table.
 
 The new Workflow is created as `status: "draft"` — two steps are still manual on purpose:
 placing signature/initial/date tabs (`add_field_tab`, since those are never auto-detected), and

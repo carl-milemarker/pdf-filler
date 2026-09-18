@@ -1,4 +1,9 @@
-const { onboardPdf } = require('../../lib/onboard');
+const { startOnboarding } = require('../../lib/onboard-async');
+
+// Starts onboarding as a Background Function job and returns almost immediately — the full
+// pipeline routinely exceeds Netlify's synchronous Function execution limit (~10-26s), so this
+// endpoint no longer runs it inline. Poll /.netlify/functions/check-onboarding-status?job_id=...
+// for the result.
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -12,55 +17,23 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Body must be JSON' }) };
   }
 
-  const { pdf_base64: pdfBase64, document_name: documentName, workflow_name: workflowName, workflow_description: workflowDescription } = payload;
-  if (!pdfBase64 || !documentName || !workflowName) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: 'Required: pdf_base64, document_name, workflow_name' }),
-    };
-  }
-
-  const requiredEnv = [
-    'DOCUSIGN_ACCOUNT_ID', 'DOCUSIGN_API_BASE_URL',
-    'MILEMARKER_BASE_URL', 'MILEMARKER_API_KEY',
-    'MILEMARKER_WORKFLOW_TYPE_ID', 'MILEMARKER_WORKFLOW_CATEGORY_ID',
-    'MILEMARKER_WORKFLOW_ACCESS_LEVELS', 'MILEMARKER_DEFAULT_ASSIGNEES',
-    'MILEMARKER_N8N_PROJECTION_ID',
-  ];
-  const missing = requiredEnv.filter((k) => !process.env[k]);
-  if (missing.length) {
-    return { statusCode: 500, body: JSON.stringify({ error: `Missing env vars: ${missing.join(', ')}` }) };
-  }
-
   try {
-    const result = await onboardPdf({
-      pdfBytes: Buffer.from(pdfBase64, 'base64'),
-      documentName,
-      workflowName,
-      workflowDescription,
-      docusign: {
-        accountId: process.env.DOCUSIGN_ACCOUNT_ID,
-        apiBase: process.env.DOCUSIGN_API_BASE_URL,
-      },
-      milemarker: {
-        baseUrl: process.env.MILEMARKER_BASE_URL,
-        apiKey: process.env.MILEMARKER_API_KEY,
-        workflowTypeId: Number(process.env.MILEMARKER_WORKFLOW_TYPE_ID),
-        workflowCategoryId: Number(process.env.MILEMARKER_WORKFLOW_CATEGORY_ID),
-        workflowAccessLevels: process.env.MILEMARKER_WORKFLOW_ACCESS_LEVELS.split(',').map(Number),
-        defaultAssignees: process.env.MILEMARKER_DEFAULT_ASSIGNEES.split(',').map(Number),
-        n8nProjectionId: Number(process.env.MILEMARKER_N8N_PROJECTION_ID),
-      },
+    const result = await startOnboarding({
+      pdfBase64: payload.pdf_base64,
+      documentName: payload.document_name,
+      workflowName: payload.workflow_name,
+      workflowDescription: payload.workflow_description,
+      siteUrl: process.env.URL,
     });
     return {
-      statusCode: 200,
+      statusCode: 202,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(result),
+      body: JSON.stringify({ job_id: result.jobId, status: result.status, message: result.message }),
     };
   } catch (err) {
     return {
       statusCode: 502,
-      body: JSON.stringify({ error: 'Onboarding pipeline failed', detail: String(err && err.message ? err.message : err) }),
+      body: JSON.stringify({ error: 'Failed to start onboarding job', detail: String(err && err.message ? err.message : err) }),
     };
   }
 };

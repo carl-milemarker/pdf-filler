@@ -3,7 +3,8 @@
 <p>This site has no pages — it hosts Netlify Functions:</p>
 <ul>
   <li><code>/.netlify/functions/extract-fields</code></li>
-  <li><code>/.netlify/functions/onboard-pdf</code></li>
+  <li><code>/.netlify/functions/onboard-pdf</code> — starts a background job, returns a job_id</li>
+  <li><code>/.netlify/functions/check-onboarding-status</code> — poll with a job_id</li>
   <li><code>/.netlify/functions/add-field-tab</code></li>
-  <li><code>/.netlify/functions/mcp</code> — the same three tools over MCP (Streamable HTTP)</li>
+  <li><code>/.netlify/functions/mcp</code> — the same tools over MCP (Streamable HTTP)</li>
 </ul>
