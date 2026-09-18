@@ -25,6 +25,7 @@ exports.handler = async (event) => {
     'MILEMARKER_BASE_URL', 'MILEMARKER_API_KEY',
     'MILEMARKER_WORKFLOW_TYPE_ID', 'MILEMARKER_WORKFLOW_CATEGORY_ID',
     'MILEMARKER_WORKFLOW_ACCESS_LEVELS', 'MILEMARKER_DEFAULT_ASSIGNEES',
+    'MILEMARKER_N8N_PROJECTION_ID',
   ];
   const missing = requiredEnv.filter((k) => !process.env[k]);
   if (missing.length) {
@@ -48,6 +49,7 @@ exports.handler = async (event) => {
         workflowCategoryId: Number(process.env.MILEMARKER_WORKFLOW_CATEGORY_ID),
         workflowAccessLevels: process.env.MILEMARKER_WORKFLOW_ACCESS_LEVELS.split(',').map(Number),
         defaultAssignees: process.env.MILEMARKER_DEFAULT_ASSIGNEES.split(',').map(Number),
+        n8nProjectionId: Number(process.env.MILEMARKER_N8N_PROJECTION_ID),
       },
     });
     return {

@@ -35,7 +35,10 @@ positioned (confirmed visually via a test envelope — see the plan doc for deta
 
 ### `POST /.netlify/functions/onboard-pdf`
 The full pipeline: extract → map field names → create a DocuSign Template → create a matching
-Milemarker Form + Workflow. **Requires DocuSign + Milemarker env vars** (see `.env.example`).
+Milemarker Form + Workflow → attach the create-trigger to the shared n8n automation → write the
+document-identity mapping record n8n uses to resolve the template. **Requires DocuSign + Milemarker
+env vars** (see `.env.example`) — this is a fully wired, end-to-end onboard, not just the
+Milemarker/DocuSign records.
 
 ```json
 {
@@ -46,8 +49,23 @@ Milemarker Form + Workflow. **Requires DocuSign + Milemarker env vars** (see `.e
 }
 ```
 ```json
-{ "formId": 62, "workflowId": 55, "templateId": "8d59e356-...", "fieldCount": 291, "byType": { "text": 150, "checkbox": 141 } }
+{ "formId": 62, "workflowId": 55, "templateId": "8d59e356-...", "fieldCount": 291, "byType": { "text": 150, "checkbox": 141 }, "n8nAttached": true, "mappingRecordId": "01M...", "note": "..." }
 ```
+
+The new Workflow is created as `status: "draft"` — two steps are still manual on purpose:
+placing signature/initial/date tabs (`add_field_tab`, since those are never auto-detected), and
+publishing the Workflow once those are confirmed placed, so an unsignable document can't reach a
+real client in the meantime.
+
+`lib/milemarker.js#attachN8nProjection` reuses the **existing** n8n projection (one shared
+"FLATIRON | Generic Doc Onboarding" n8n workflow serves every onboarded document — no new n8n
+workflow gets created per document) via Milemarker's Workflow Projection Setup API
+(`POST /workflows/{id}/projections`). `#createDocumentMapping` writes the
+`docusign_onboarded_documents` custom-object record n8n looks up by `milemarker_workflow_id` at
+submit time — created with the **same** `MILEMARKER_API_KEY` identity that will later query it,
+since custom object records are per-user siloed by `created_by` (a real bug hit and fixed by hand
+this session: a different identity's writes are invisible to this API key's reads, even with
+`context=all`).
 
 `lib/field-mapping.js` turns raw hierarchical PDF field names (e.g.
 `clients[0].Form[0]...SelectIRAType[0]...Checkboxes[0].contributory[0]`) into short, de-duplicated
