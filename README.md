@@ -83,6 +83,30 @@ PDF's attached IRS Form W-4R page turned out to be a **flattened scanned image w
 layer** (`get_text()` returns `''`), so its signature/date tabs had to be placed by estimating pixel
 coordinates from a rendered image instead.
 
+### `POST /.netlify/functions/mcp`
+The same three capabilities (`onboard_pdf`, `extract_fields`, `add_field_tab`) exposed as MCP tools
+over the **Streamable HTTP** transport, so a Claude session can call them conversationally instead
+of by hand-running curl/API calls — e.g. "convert this PDF to fillable with DocuSign and a new MM
+workflow" resolves to an `onboard_pdf` tool call.
+
+Stateless: every request is one JSON-RPC 2.0 message in, one response out — no SSE stream, no
+session store (Netlify Functions are short-lived and can't hold a stream open anyway; a server that
+doesn't need server-initiated messages or resumable streams is allowed to respond directly instead
+of opening one, per the MCP spec). `lib/mcp-tools.js` holds the tool schemas and dispatch; it's a
+thin wrapper over the exact same `lib/onboard.js` / `lib/extract-fields.js` /
+`lib/docusign-template.js` functions the plain-HTTP endpoints above call — one implementation, two
+transports.
+
+Guarded by a shared secret: set `MCP_SERVER_KEY` and every request must carry
+`Authorization: Bearer <key>` (checked in `netlify/functions/mcp.js`) — this endpoint can trigger
+real DocuSign envelope creation and real Milemarker workflow creation, so unlike `extract-fields` it
+shouldn't be left open at a guessable URL. Leaving `MCP_SERVER_KEY` unset disables the check, for
+local `netlify dev` only.
+
+To register it in Claude Code, add an entry pointing at
+`https://mm-pdf-filler.netlify.app/.netlify/functions/mcp` with the `Authorization: Bearer <key>`
+header set.
+
 ## Local testing
 
 ```bash
@@ -95,6 +119,13 @@ local `.env.local` (gitignored, never committed) and use `netlify dev`, or test 
 Netlify site directly. The DocuSign private key is never typed, echoed, or transmitted through
 Claude at any point — only pasted directly by a human into Netlify's dashboard or a local
 `.env.local`.
+
+`mcp.js` can be exercised directly with `node`, no server needed:
+
+```js
+const { handler } = require('./netlify/functions/mcp.js');
+await handler({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+```
 
 ## Hosting
 
