@@ -64,6 +64,13 @@ to 15 minutes, at the cost of not being able to return a result directly to the 
 the actual work; `onboard-pdf.js` and the `onboard_pdf` MCP tool just kick it off via
 `lib/onboard-async.js#startOnboarding` and return a `job_id`.
 
+**Background Function invocations have their own, much smaller payload cap** — also discovered
+live: the same PDF's ~4MB base64 body got a 413 invoking `onboard-pdf-background` directly, not
+just via the function-to-function hop. So the PDF bytes never travel in the background
+invocation's body at all: `startOnboarding` stashes them in a **Netlify Blob** (`@netlify/blobs`,
+store `onboard-pdf-pending`, keyed by job id) and the background function reads them back by key,
+deleting the blob when it's done (success or failure).
+
 ### `GET/POST /.netlify/functions/check-onboarding-status`
 Poll this with the `job_id` from `onboard-pdf`/`onboard_pdf` to get the result once it's done.
 ```
