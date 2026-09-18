@@ -1,74 +1,110 @@
-# DocuSign PDF Field Extractor
+# DocuSign PDF Onboarding Service
 
-Netlify Function that reads any PDF's native fillable-field geometry (page, position, type) and
-returns a DocuSign-ready tab list. This is the first building block of the generic "onboard any PDF
-into a new Milemarker + DocuSign workflow" pipeline — see the plan for the full design.
+Netlify Functions that turn any PDF into a fillable DocuSign template paired with a matching
+Milemarker Workflow + Form — the "onboard this PDF" pipeline. Built alongside the original DocuSign
+POC (Flatiron workflow 54 / form 61) without touching it.
 
 ## Why this exists
 
 DocuSign's own "import PDF form fields" auto-tagging only works on plain AcroForms, not
 **XFA-hybrid** PDFs (the format most real financial-institution forms use, e.g. Charles Schwab's IRA
-Account Application). n8n's Code node also can't `require()` a PDF-parsing npm package, so this
-logic can't live inside an n8n workflow either — it needs to run somewhere with a real Node runtime.
+Account Application). n8n's Code node also can't `require()` a PDF-parsing npm package, so none of
+this logic can live inside an n8n workflow — it needs to run somewhere with a real Node runtime.
 
-Verified against a real 21-page, XFA-hybrid Schwab PDF (via Python `pypdf`, read-only, before this
-service was written): even though DocuSign can't self-detect anything from the file, the underlying
-`/Widget` annotations still carry full geometry (page, `/Rect`, `/FT` type, `/T` name) for every real
-field. This service ports that same approach to Node (`pdf-lib`) so it can run as part of the actual
-pipeline.
+## Endpoints
 
-## How it works
-
-`lib/extract-fields.js` walks each page's raw `/Annots` → `/Widget` entries directly — **not**
-`pdfDoc.getForm()`'s high-level Form API, which is unreliable against XFA-hybrid PDFs. For each
-widget it:
-- Resolves `/FT` (field type), `/Ff` (flags), and `/T` (name) up the `/Parent` chain, since XFA-hybrid
-  PDFs often inherit these from a parent field object rather than setting them directly on the widget.
-- Filters out UI-chrome widgets that aren't real data fields (clear/print buttons, QR/barcode helper
-  fields) by name pattern.
-- Maps `/Tx` → `text`, `/Ch` → `dropdown`/`list` (via the Combo flag), `/Btn` → `checkbox`/`radio`
-  (via the Radio/Pushbutton flags; pushbuttons are skipped entirely).
-- Converts the PDF's bottom-left-origin `/Rect` coordinates to DocuSign's top-left-origin tab
-  coordinates.
-
-## API
-
-`POST /.netlify/functions/extract-fields`
+### `POST /.netlify/functions/extract-fields`
+Reads a PDF's native fillable-field geometry. No secrets needed.
 
 ```json
 { "pdf_base64": "<base64-encoded PDF bytes>" }
 ```
+```json
+{ "pageCount": 21, "fields": [{ "page": 1, "x": 152, "y": 706, "width": 98, "height": 10, "tabType": "text", "name": "clients[0]...SchwabAccountNumber[0]" }] }
+```
 
-Response:
+`lib/extract-fields.js` walks each page's raw `/Annots` → `/Widget` entries directly — **not**
+`pdfDoc.getForm()`'s high-level Form API, which is unreliable against XFA-hybrid PDFs. It resolves
+`/FT`/`/Ff`/`/T` up the `/Parent` chain (XFA-hybrid PDFs often inherit these rather than setting them
+directly on the widget), filters out UI chrome (clear/print buttons, QR/barcode fields), maps
+`/Tx`→text, `/Ch`→dropdown/list, `/Btn`→checkbox/radio, and converts the PDF's bottom-left-origin
+`/Rect` to DocuSign's top-left-origin tab coordinates.
+
+Verified against the real 21-page Schwab IRA Application: 293 real fields extracted, all correctly
+positioned (confirmed visually via a test envelope — see the plan doc for details).
+
+### `POST /.netlify/functions/onboard-pdf`
+The full pipeline: extract → map field names → create a DocuSign Template → create a matching
+Milemarker Form + Workflow. **Requires DocuSign + Milemarker env vars** (see `.env.example`).
 
 ```json
 {
-  "pageCount": 21,
-  "fields": [
-    { "page": 1, "x": 152, "y": 706, "width": 98, "height": 10, "tabType": "text", "name": "SchwabAccountNumber[0]" },
-    ...
-  ]
+  "pdf_base64": "<base64-encoded PDF bytes>",
+  "document_name": "4.pdf",
+  "workflow_name": "Schwab IRA Account Application",
+  "workflow_description": "optional"
 }
 ```
+```json
+{ "formId": 62, "workflowId": 55, "templateId": "8d59e356-...", "fieldCount": 291, "byType": { "text": 150, "checkbox": 141 } }
+```
+
+`lib/field-mapping.js` turns raw hierarchical PDF field names (e.g.
+`clients[0].Form[0]...SelectIRAType[0]...Checkboxes[0].contributory[0]`) into short, de-duplicated
+snake_case keys (`contributory`, `contributory_1`, ...) used as **both** the DocuSign tab label and
+the Milemarker form field key — this 1:1 naming is what a future n8n workflow can use as a simple
+lookup instead of hardcoded field names. It also filters out DocuSign's own embedded
+"IgnoreTransform" signature/print-name placeholder fields (found baked into the real Schwab PDF —
+not real client data fields).
+
+`lib/docusign-template.js` creates the Template with every mapped field as a signer-fillable tab,
+**explicitly `required: false`** — DocuSign defaults text/checkbox tabs to `required: true`, which
+would otherwise block a signer from finishing until they filled in literally every detected field
+(a real bug caught and fixed by hand before this was ported into code).
+
+`lib/milemarker.js` builds the matching Milemarker form schema (one field per detected PDF field,
+per the "auto-create everything" decision) and creates the Form + Workflow via Milemarker's raw REST
+API (`POST /forms`, `POST /workflows`) — note `schema`/`form` must be sent as pre-stringified JSON
+(Milemarker stores them double-encoded; confirmed by reading a live form's raw API response).
+
+### `POST /.netlify/functions/add-field-tab`
+Patches a field the automatic extraction missed onto an already-created template — including
+signature/initial/date lines, which are never detectable as normal form fields (they're just
+printed lines in the source PDF).
+
+```json
+{ "template_id": "8d59e356-...", "tab_type": "signHere", "anchor_string": "Signature: Account Holder", "y_offset": -15 }
+```
+
+Prefers **anchor-string placement** (DocuSign finds the given text on the page itself) over raw
+coordinates — no manual dragging in the DocuSign console needed. Falls back to explicit
+`page`/`x`/`y` when there's no anchor text to use at all: a real case hit this session — the Schwab
+PDF's attached IRS Form W-4R page turned out to be a **flattened scanned image with zero text
+layer** (`get_text()` returns `''`), so its signature/date tabs had to be placed by estimating pixel
+coordinates from a rendered image instead.
 
 ## Local testing
 
 ```bash
 npm install
-node test-local.js /path/to/some.pdf
+node test-local.js /path/to/some.pdf   # extraction only, no secrets needed
 ```
 
-Prints page count, field count, a breakdown by type, and the first 20 extracted fields.
+`onboard-pdf` and `add-field-tab` need real DocuSign/Milemarker credentials to test — set them in a
+local `.env.local` (gitignored, never committed) and use `netlify dev`, or test against the deployed
+Netlify site directly. The DocuSign private key is never typed, echoed, or transmitted through
+Claude at any point — only pasted directly by a human into Netlify's dashboard or a local
+`.env.local`.
 
 ## Hosting
 
-Deployed as its own Netlify site, in its own GitHub repo, under Carl's own personal GitHub/Netlify
-account (not the shared Milemarker Core Netlify team — see project memory on known auth/secret-env
-issues with that account) — same pattern already used for `automation/tfg/netlify-pdf-fill/`.
+Deployed as its own Netlify site, in its own GitHub repo (`github.com/carl-milemarker/pdf-filler`),
+under Carl's own personal GitHub/Netlify account — not the shared Milemarker Core Netlify team (see
+project memory on known auth/secret-env issues with that account). Same pattern already used for
+`automation/tfg/netlify-pdf-fill/`.
 
 ## Secrets
 
-This function is currently stateless and needs no secrets. See `.env.example` for what future
-pipeline stages (Milemarker/DocuSign/n8n API calls) will need — those get set directly in Netlify's
-dashboard, never typed or transmitted through Claude, per this project's established
-private-key-handling convention.
+See `.env.example` for the full list. All of them get set directly in Netlify's dashboard
+(Site settings → Environment variables) — never through Claude or any automated tool call, per this
+project's established private-key-handling convention.

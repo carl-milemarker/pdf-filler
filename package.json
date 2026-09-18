@@ -2,7 +2,7 @@
   "name": "docusign-pdf-field-extractor",
   "version": "1.0.0",
   "private": true,
-  "description": "Netlify Function that reads any PDF's native fillable-field geometry (page, position, type) and returns a DocuSign-ready tab list — needed because n8n's Code node cannot require() a PDF-parsing library directly.",
+  "description": "Netlify Functions that onboard any PDF into a fillable DocuSign template paired with a matching Milemarker Workflow + Form — field extraction, DocuSign Template creation, and Milemarker Form/Workflow creation, none of which can run inside n8n's sandboxed Code node.",
   "scripts": {
     "test": "node test-local.js"
   },
