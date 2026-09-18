@@ -20,6 +20,7 @@ exports.handler = async (event) => {
   try {
     const result = await startOnboarding({
       pdfBase64: payload.pdf_base64,
+      pdfUrl: payload.pdf_url,
       documentName: payload.document_name,
       workflowName: payload.workflow_name,
       workflowDescription: payload.workflow_description,

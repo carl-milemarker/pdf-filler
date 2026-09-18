@@ -1,6 +1,5 @@
 const { extractFields } = require('../../lib/extract-fields');
-
-const MAX_BODY_BYTES = 20 * 1024 * 1024; // 20MB, generous for a scanned/multi-page PDF
+const { resolvePdfBytes } = require('../../lib/fetch-pdf');
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -14,22 +13,19 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Body must be JSON' }) };
   }
 
-  const { pdf_base64: pdfBase64 } = payload;
-  if (!pdfBase64 || typeof pdfBase64 !== 'string') {
+  const { pdf_base64: pdfBase64, pdf_url: pdfUrl } = payload;
+  if (!pdfBase64 && !pdfUrl) {
     return {
       statusCode: 400,
-      body: JSON.stringify({ error: 'Missing required field "pdf_base64" (base64-encoded PDF bytes)' }),
+      body: JSON.stringify({ error: 'Provide either "pdf_base64" (base64-encoded PDF bytes) or "pdf_url" (a URL this server fetches itself)' }),
     };
-  }
-  if (pdfBase64.length > MAX_BODY_BYTES) {
-    return { statusCode: 413, body: JSON.stringify({ error: 'PDF too large' }) };
   }
 
   let pdfBytes;
   try {
-    pdfBytes = Buffer.from(pdfBase64, 'base64');
+    pdfBytes = await resolvePdfBytes({ pdfBase64, pdfUrl });
   } catch (err) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'pdf_base64 is not valid base64' }) };
+    return { statusCode: 400, body: JSON.stringify({ error: String(err && err.message ? err.message : err) }) };
   }
 
   try {

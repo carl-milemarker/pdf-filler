@@ -14,7 +14,8 @@ this logic can live inside an n8n workflow — it needs to run somewhere with a 
 ## Endpoints
 
 ### `POST /.netlify/functions/extract-fields`
-Reads a PDF's native fillable-field geometry. No secrets needed.
+Reads a PDF's native fillable-field geometry. No secrets needed. Accepts either `pdf_base64` or
+`pdf_url` (the server fetches the file itself) — see the `pdf_url` note under `onboard-pdf` below.
 
 ```json
 { "pdf_base64": "<base64-encoded PDF bytes>" }
@@ -38,6 +39,13 @@ Runs phase 1 synchronously — extract fields, map field names, create the DocuS
 (the only part of the pipeline that needs the PDF's raw bytes) — then starts phase 2 (Milemarker
 Form + Workflow creation, the n8n attach, the mapping record) as a **background job**.
 **Requires DocuSign + Milemarker env vars** (see `.env.example`).
+
+Accepts either `pdf_base64` or `pdf_url` (provide exactly one). **`pdf_url` is the preferred
+option whenever the file isn't tiny**: it's a URL this server fetches itself
+(`lib/fetch-pdf.js#resolvePdfBytes`), so the PDF's bytes never have to pass through the calling
+MCP client at all. This matters a lot for plain chat-based MCP clients with no file-system/
+terminal access (unlike Claude Code) — those clients can't reliably generate/pass a multi-MB
+base64 string as a single tool-call argument, which is a hard wall `pdf_url` sidesteps entirely.
 
 ```json
 {
