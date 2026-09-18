@@ -108,3 +108,4 @@ project memory on known auth/secret-env issues with that account). Same pattern 
 See `.env.example` for the full list. All of them get set directly in Netlify's dashboard
 (Site settings → Environment variables) — never through Claude or any automated tool call, per this
 project's established private-key-handling convention.
+
