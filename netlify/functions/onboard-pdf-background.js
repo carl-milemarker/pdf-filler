@@ -1,8 +1,5 @@
-const { getStore } = require('@netlify/blobs');
-const { onboardPdf } = require('../../lib/onboard');
+const { createWorkflowForTemplate } = require('../../lib/onboard');
 const { completeJob, failJob } = require('../../lib/job-store');
-
-const PDF_BLOB_STORE = 'onboard-pdf-pending';
 
 // Netlify Background Function (note the "-background" suffix in the filename — that's what
 // tells Netlify to run this as one: the platform responds 202 to the caller immediately,
@@ -10,23 +7,26 @@ const PDF_BLOB_STORE = 'onboard-pdf-pending';
 // of the ~10-26s limit a normal synchronous Function gets. There is no way to return a result
 // to the original caller from here — job-store.js is how the result gets published instead.
 //
-// The PDF bytes are NOT in this invocation's own payload — Background Function invocations
-// have a much smaller body-size cap than regular synchronous Functions (confirmed live: a
-// ~4MB base64 PDF got a 413 even hitting this function directly), so lib/onboard-async.js
-// stashes them in a Netlify Blob keyed by job id instead, and this function reads them back.
+// This only runs phase 2 (lib/onboard.js#createWorkflowForTemplate) — Milemarker Form/Workflow
+// creation, the n8n attach, the mapping record. Phase 1 (DocuSign Template creation, the only
+// step that needs the PDF's raw bytes) already ran synchronously in onboard-pdf.js before this
+// was invoked — a real constraint discovered live: Background Function invocations have their
+// own payload cap far too small for a multi-MB PDF, smaller even than a regular synchronous
+// Function's, so the PDF bytes must never need to travel into this invocation's payload at all.
 
 exports.handler = async (event) => {
   const payload = JSON.parse(event.body || '{}');
   const {
     job_record_id: jobRecordId,
-    pdf_blob_key: pdfBlobKey,
+    template_id: templateId,
+    mapped_fields: mappedFields,
+    field_count: fieldCount,
+    by_type: byType,
+    pdf_sha256: pdfSha256,
     document_name: documentName,
     workflow_name: workflowName,
     workflow_description: workflowDescription,
   } = payload;
-
-  const blobStore = getStore(PDF_BLOB_STORE);
-  const pdfBase64 = await blobStore.get(pdfBlobKey);
 
   const milemarkerConfig = {
     baseUrl: process.env.MILEMARKER_BASE_URL,
@@ -39,15 +39,15 @@ exports.handler = async (event) => {
   };
 
   try {
-    const result = await onboardPdf({
-      pdfBytes: Buffer.from(pdfBase64, 'base64'),
+    const result = await createWorkflowForTemplate({
+      templateId,
+      mappedFields,
+      fieldCount,
+      byType,
+      pdfSha256,
       documentName,
       workflowName,
       workflowDescription,
-      docusign: {
-        accountId: process.env.DOCUSIGN_ACCOUNT_ID,
-        apiBase: process.env.DOCUSIGN_API_BASE_URL,
-      },
       milemarker: milemarkerConfig,
     });
     await completeJob({ baseUrl: milemarkerConfig.baseUrl, apiKey: milemarkerConfig.apiKey, recordId: jobRecordId, result });
@@ -58,7 +58,5 @@ exports.handler = async (event) => {
       recordId: jobRecordId,
       errorMessage: String(err && err.message ? err.message : err),
     });
-  } finally {
-    await blobStore.delete(pdfBlobKey).catch(() => {});
   }
 };

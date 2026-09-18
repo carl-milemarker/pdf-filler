@@ -28,7 +28,13 @@ exports.handler = async (event) => {
     return {
       statusCode: 202,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: result.jobId, status: result.status, message: result.message }),
+      body: JSON.stringify({
+        job_id: result.jobId,
+        status: result.status,
+        template_id: result.templateId,
+        field_count: result.fieldCount,
+        message: result.message,
+      }),
     };
   } catch (err) {
     return {

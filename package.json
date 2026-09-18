@@ -7,7 +7,6 @@
     "test": "node test-local.js"
   },
   "dependencies": {
-    "@netlify/blobs": "^11.1.0",
     "pdf-lib": "^1.17.1"
   }
 }

@@ -34,9 +34,9 @@ Verified against the real 21-page Schwab IRA Application: 293 real fields extrac
 positioned (confirmed visually via a test envelope — see the plan doc for details).
 
 ### `POST /.netlify/functions/onboard-pdf`
-Starts the full pipeline as a **background job**: extract → map field names → create a DocuSign
-Template → create a matching Milemarker Form + Workflow → attach the create-trigger to the shared
-n8n automation → write the document-identity mapping record n8n uses to resolve the template.
+Runs phase 1 synchronously — extract fields, map field names, create the DocuSign Template
+(the only part of the pipeline that needs the PDF's raw bytes) — then starts phase 2 (Milemarker
+Form + Workflow creation, the n8n attach, the mapping record) as a **background job**.
 **Requires DocuSign + Milemarker env vars** (see `.env.example`).
 
 ```json
@@ -47,29 +47,38 @@ n8n automation → write the document-identity mapping record n8n uses to resolv
   "workflow_description": "optional"
 }
 ```
-Returns almost immediately (HTTP 202) with a job id — the pipeline itself keeps running in the
-background:
+Returns once phase 1 is done (HTTP 202) with a job id for phase 2 — the DocuSign Template already
+exists at this point:
 ```json
-{ "job_id": "3f2e...", "status": "pending", "message": "..." }
+{ "job_id": "3f2e...", "status": "pending", "template_id": "8d59e356-...", "field_count": 291, "message": "..." }
 ```
 
-**Why this is async, not synchronous:** the full pipeline chains 7+ sequential network calls
-(PDF parse, DocuSign OAuth, DocuSign Template creation with the PDF's own bytes uploaded, Milemarker
-Form creation, Milemarker Workflow creation, the n8n attach, the mapping record) — for a real
-multi-MB, multi-page PDF this routinely exceeds Netlify's synchronous Function execution limit
-(~10-26s depending on plan). Discovered live: a 21-page, 2.9MB PDF hit a 504 "Inactivity Timeout"
-on the old synchronous version. `netlify/functions/onboard-pdf-background.js` (note the
-`-background` filename suffix — that's what tells Netlify to run it as a Background Function, up
-to 15 minutes, at the cost of not being able to return a result directly to the caller) now does
-the actual work; `onboard-pdf.js` and the `onboard_pdf` MCP tool just kick it off via
-`lib/onboard-async.js#startOnboarding` and return a `job_id`.
+**Why this is split into two phases instead of one synchronous call:** the full pipeline chains
+7+ sequential network calls (PDF parse, DocuSign OAuth, DocuSign Template creation with the PDF's
+own bytes uploaded, Milemarker Form creation, Milemarker Workflow creation, the n8n attach, the
+mapping record) — for a real multi-MB, multi-page PDF this routinely exceeds Netlify's
+synchronous Function execution limit (~10-26s depending on plan). Discovered live: a 21-page,
+2.9MB PDF hit a 504 "Inactivity Timeout" on the original all-synchronous version.
 
-**Background Function invocations have their own, much smaller payload cap** — also discovered
-live: the same PDF's ~4MB base64 body got a 413 invoking `onboard-pdf-background` directly, not
-just via the function-to-function hop. So the PDF bytes never travel in the background
-invocation's body at all: `startOnboarding` stashes them in a **Netlify Blob** (`@netlify/blobs`,
-store `onboard-pdf-pending`, keyed by job id) and the background function reads them back by key,
-deleting the blob when it's done (success or failure).
+The first fix attempt made the *whole* pipeline a Background Function
+(`netlify/functions/onboard-pdf-background.js` — note the `-background` filename suffix, which is
+what tells Netlify to run it that way, up to 15 minutes instead of ~10-26s) and passed the PDF
+bytes into its invocation payload. That hit a second, harder wall: **Background Function
+invocations have their own, much smaller payload cap than regular synchronous Functions** —
+confirmed live, the same PDF's ~4MB base64 body got a 413 invoking `onboard-pdf-background`
+directly, not just via a function-to-function hop. Netlify Blobs (`@netlify/blobs`) was tried
+next as a hand-off store, but the zero-config `getStore()` auto-context wasn't available in this
+deploy either ("environment has not been configured to use Netlify Blobs"), and stashing the PDF
+in a Milemarker custom-object field hit a 500 there too (Milemarker's own API doesn't accept a
+multi-MB field value).
+
+The fix that actually worked: **the PDF bytes never need to leave the original request at all.**
+`lib/onboard.js` is split into `createTemplateFromPdf` (phase 1, needs the PDF) and
+`createWorkflowForTemplate` (phase 2, only needs the small `mappedFields` array phase 1
+produces). `onboard-pdf.js` runs phase 1 inline — a couple of network calls, comfortably under
+the synchronous limit — then hands phase 2's small JSON payload (no PDF) to
+`onboard-pdf-background.js`. No blob store, no oversized custom-object field, no payload-cap
+problem anywhere in the chain.
 
 ### `GET/POST /.netlify/functions/check-onboarding-status`
 Poll this with the `job_id` from `onboard-pdf`/`onboard_pdf` to get the result once it's done.
