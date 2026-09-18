@@ -1,0 +1,13 @@
+[build]
+  publish = "public"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[dev]
+  publish = "public"
+  framework = "#static"
