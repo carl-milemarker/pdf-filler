@@ -151,8 +151,35 @@ PDF's attached IRS Form W-4R page turned out to be a **flattened scanned image w
 layer** (`get_text()` returns `''`), so its signature/date tabs had to be placed by estimating pixel
 coordinates from a rendered image instead.
 
+Accepts an optional `recipient_id` (defaults to `"1"`, the original/only signer `onboard_pdf`
+creates) — see `add-template-recipient` below for multi-signer documents.
+
+### `POST /.netlify/functions/add-template-recipient`
+Adds a second (or further) signing recipient to a template `onboard_pdf` created with only the
+implicit `"Signer 1"`/`recipientId "1"` role, and sets explicit `routingOrder` on **every**
+recipient in one call so DocuSign enforces signing order natively — a lower `routingOrder`
+recipient must complete before a later one's copy is even released.
+
+```json
+{
+  "template_id": "8d59e356-...",
+  "new_recipient_id": "2",
+  "new_role_name": "Advisor",
+  "new_routing_order": 1,
+  "existing_routing_order": 2
+}
+```
+
+`lib/docusign-template.js#setTemplateRecipients` does this with a single
+`PUT /templates/{id}/recipients` carrying the FULL desired signers array — DocuSign updates
+existing recipients by `recipientId` and adds new ones in the same request, so "add role 2" and
+"bump role 1's routingOrder" happen atomically. There was no "add a recipient to a template" call
+anywhere in this codebase before this — every prior template had exactly one hardcoded recipient.
+After adding a recipient, place its tabs with `add-field-tab`'s `recipient_id` set to the new id.
+
 ### `POST /.netlify/functions/mcp`
-The same three capabilities (`onboard_pdf`, `extract_fields`, `add_field_tab`) exposed as MCP tools
+The same capabilities (`onboard_pdf`, `extract_fields`, `add_field_tab`, `add_template_recipient`,
+`check_onboarding_status`) exposed as MCP tools
 over the **Streamable HTTP** transport, so a Claude session can call them conversationally instead
 of by hand-running curl/API calls — e.g. "convert this PDF to fillable with DocuSign and a new MM
 workflow" resolves to an `onboard_pdf` tool call.

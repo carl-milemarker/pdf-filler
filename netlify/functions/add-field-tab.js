@@ -19,7 +19,7 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Body must be JSON' }) };
   }
 
-  const { template_id: templateId, tab_type: tabType, tab_label: tabLabel, anchor_string: anchorString, x_offset: xOffset, y_offset: yOffset, page, x, y } = payload;
+  const { template_id: templateId, tab_type: tabType, tab_label: tabLabel, anchor_string: anchorString, x_offset: xOffset, y_offset: yOffset, page, x, y, recipient_id: recipientId } = payload;
 
   if (!templateId || !tabType) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Required: template_id, tab_type' }) };
@@ -46,6 +46,7 @@ exports.handler = async (event) => {
       templateId,
       tabType,
       tabLabel,
+      recipientId: recipientId || '1',
     };
     const result = anchorString
       ? await addAnchoredTab({ ...common, anchorString, xOffset: xOffset || 0, yOffset: yOffset || 0 })
